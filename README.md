@@ -54,8 +54,18 @@ bin_centers, predicted_depth = infer_helper.predict_pil(img)
 infer_helper.predict_dir("/path/to/input/dir/containing_only_images/", "path/to/output/dir/")
 
 ```
-## TODO:
-* Add instructions for Evaluation and Training.
-* Add Colab demo
-* Add UI demo
-* Remove unnecessary dependencies
+## Instruction:
+### Install necessary packages
+Create virtual enviroment (`VENV`) and install packages.
+```
+$ virtualenv VENV
+$source VENV/bin/activate
+$ pip install torch torchvision torchaudio
+```
+### Create secrets.py to have wandb key
+refers to https://wandb.ai/home
+create `secrets.py` and enter `WANDB_API_KEY="xxxxx"`, `xxxxx` is you key.
+
+### Check and run train.sh (on GreatLakes)
+Modify the virtual enviroment name. Take a look at the parameters below.
+Enter `$ sh train.sh` to submit the job.
