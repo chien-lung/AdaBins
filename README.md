@@ -59,7 +59,7 @@ infer_helper.predict_dir("/path/to/input/dir/containing_only_images/", "path/to/
 Create virtual enviroment (`VENV`) and install packages.
 ```
 $ virtualenv VENV
-$source VENV/bin/activate
+$ source VENV/bin/activate
 $ pip install torch torchvision torchaudio
 ```
 ### Create secrets.py to have wandb key
@@ -67,5 +67,10 @@ refers to https://wandb.ai/home
 create `secrets.py` and enter `WANDB_API_KEY="xxxxx"`, `xxxxx` is you key.
 
 ### Check and run train.sh (on GreatLakes)
-Modify the virtual enviroment name. Take a look at the parameters below.
-Enter `$ sh train.sh` to submit the job.
+* Modify the virtual enviroment name.
+* Take a look at the parameters below, especially for `w_grad` and `w_norm`.
+* Enter `$ sbatch train.sh` to submit the job.
+
+### Sync Wandb manually
+`$ wandb sync wandb/offline-run-2021xxxx_xxxxxx-xxxxxxx`
+Then you can go to Wandb website to check training status.
