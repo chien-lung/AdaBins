@@ -6,7 +6,7 @@ class PatchTransformerEncoder(nn.Module):
     def __init__(self, in_channels, patch_size=10, embedding_dim=128, num_heads=4):
         super(PatchTransformerEncoder, self).__init__()
         encoder_layers = nn.TransformerEncoderLayer(embedding_dim, num_heads, dim_feedforward=1024)
-        self.transformer_encoder = nn.TransformerEncoder(encoder_layers, num_layers=4)  # takes shape S,N,E
+        self.transformer_encoder = nn.TransformerEncoder(encoder_layers, num_layers=4)  # takes shape S,N,E (where S = h/p*w/p)
 
         self.embedding_convPxP = nn.Conv2d(in_channels, embedding_dim,
                                            kernel_size=patch_size, stride=patch_size, padding=0)
@@ -14,6 +14,7 @@ class PatchTransformerEncoder(nn.Module):
         self.positional_encodings = nn.Parameter(torch.rand(500, embedding_dim), requires_grad=True)
 
     def forward(self, x):
+        # n, c, h, w -> n, c, h/p, w/p -> n, c, s = n, embedding_dim, s
         embeddings = self.embedding_convPxP(x).flatten(2)  # .shape = n,c,s = n, embedding_dim, s
         # embeddings = nn.functional.pad(embeddings, (1,0))  # extra special token at start ?
         embeddings = embeddings + self.positional_encodings[:embeddings.shape[2], :].T.unsqueeze(0)

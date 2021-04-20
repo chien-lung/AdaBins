@@ -3,6 +3,7 @@ import os
 import sys
 import uuid
 from datetime import datetime as dt
+import matplotlib
 
 import numpy as np
 import torch
@@ -18,19 +19,19 @@ import model_io
 import models
 import utils
 from dataloader import DepthDataLoader
-from loss import SILogLoss, BinsChamferLoss
+from loss import SILogLoss, DepthLoss, GradientLoss
 from utils import RunningAverage, colorize
 
-# os.environ['WANDB_MODE'] = 'dryrun'
+import secrets
+
+os.environ["WANDB_API_KEY"] = secrets.WANDB_API_KEY
+os.environ['WANDB_MODE'] = 'dryrun'
 PROJECT = "MDE-AdaBins"
 logging = True
 
 
 def is_rank_zero(args):
     return args.rank == 0
-
-
-import matplotlib
 
 
 def colorize(value, vmin=10, vmax=1000, cmap='plasma'):
@@ -97,10 +98,11 @@ def main_worker(gpu, ngpus_per_node, args):
                                                           find_unused_parameters=True)
 
     elif args.gpu is None:
-        # Use DP
-        args.multigpu = True
-        model = model.cuda()
-        model = torch.nn.DataParallel(model)
+        if torch.cuda.is_available():
+            # Use DP
+            args.multigpu = True
+            model = model.cuda()
+            model = torch.nn.DataParallel(model)
 
     args.epoch = 0
     args.last_epoch = -1
@@ -133,8 +135,9 @@ def train(model, args, epochs=10, experiment_name="DeepLab", lr=0.0001, root="."
     test_loader = DepthDataLoader(args, 'online_eval').data
 
     ###################################### losses ##############################################
-    criterion_ueff = SILogLoss()
-    criterion_bins = BinsChamferLoss() if args.chamfer else None
+    criterion_depth = SILogLoss()
+    # criterion_depth = DepthLoss()
+    criterion_grad_norm = GradientLoss()
     ################################################################################################
 
     model.train()
@@ -187,21 +190,18 @@ def train(model, args, epochs=10, experiment_name="DeepLab", lr=0.0001, root="."
             bin_edges, pred = model(img)
 
             mask = depth > args.min_depth
-            l_dense = criterion_ueff(pred, depth, mask=mask.to(torch.bool), interpolate=True)
-
-            if args.w_chamfer > 0:
-                l_chamfer = criterion_bins(bin_edges, depth)
-            else:
-                l_chamfer = torch.Tensor([0]).to(img.device)
-
-            loss = l_dense + args.w_chamfer * l_chamfer
+            # l_dense = criterion_ueff(pred, depth, mask=mask.to(torch.bool), interpolate=True)
+            l_depth = criterion_depth(pred, depth, mask=mask.to(torch.bool), interpolate=True)
+            l_grad, l_norm = criterion_grad_norm(pred, depth, mask=mask.to(torch.bool), interpolate=True)
+            loss = l_depth + args.w_grad*l_grad + args.w_norm*l_norm
             loss.backward()
             nn.utils.clip_grad_norm_(model.parameters(), 0.1)  # optional
             optimizer.step()
             if should_log and step % 5 == 0:
-                wandb.log({f"Train/{criterion_ueff.name}": l_dense.item()}, step=step)
-                wandb.log({f"Train/{criterion_bins.name}": l_chamfer.item()}, step=step)
-
+                # wandb.log({f"Train/{criterion_ueff.name}": l_dense.item()}, step=step)
+                wandb.log({f"Train/{criterion_depth.name}": l_depth.item()}, step=step)
+                wandb.log({f"Train/{criterion_grad_norm.name[0]}": l_grad.item()}, step=step)
+                wandb.log({f"Train/{criterion_grad_norm.name[1]}": l_norm.item()}, step=step)
             step += 1
             scheduler.step()
 
@@ -211,12 +211,14 @@ def train(model, args, epochs=10, experiment_name="DeepLab", lr=0.0001, root="."
 
                 ################################# Validation loop ##################################################
                 model.eval()
-                metrics, val_si = validate(args, model, test_loader, criterion_ueff, epoch, epochs, device)
+                # metrics, val_si = validate(args, model, test_loader, criterion_ueff, epoch, epochs, device)
+                metrics, val_depth = validate(args, model, test_loader, criterion_depth, epoch, epochs, device)
 
                 # print("Validated: {}".format(metrics))
                 if should_log:
                     wandb.log({
-                        f"Test/{criterion_ueff.name}": val_si.get_value(),
+                        f"Test/{criterion_depth.name}": val_depth.get_value(),
+                        # f"Test/{criterion_ueff.name}": val_si.get_value(),
                         # f"Test/{criterion_bins.name}": val_bins.get_value()
                     }, step=step)
 
@@ -300,7 +302,7 @@ if __name__ == '__main__':
     parser.add_argument('--n-bins', '--n_bins', default=80, type=int,
                         help='number of bins/buckets to divide depth range into')
     parser.add_argument('--lr', '--learning-rate', default=0.000357, type=float, help='max learning rate')
-    parser.add_argument('--wd', '--weight-decay', default=0.1, type=float, help='weight decay')
+    parser.add_argument('--wd', '--weight-decay', default=0.01, type=float, help='weight decay')
     parser.add_argument('--w_chamfer', '--w-chamfer', default=0.1, type=float, help="weight value for chamfer loss")
     parser.add_argument('--div-factor', '--div_factor', default=25, type=float, help="Initial div factor for lr")
     parser.add_argument('--final-div-factor', '--final_div_factor', default=100, type=float,
@@ -314,7 +316,7 @@ if __name__ == '__main__':
                         choices=['linear', 'softmax', 'sigmoid'])
     parser.add_argument("--same-lr", '--same_lr', default=False, action="store_true",
                         help="Use same LR for all param groups")
-    parser.add_argument("--distributed", default=True, action="store_true", help="Use DDP if set")
+    parser.add_argument("--distributed", default=False, action="store_true", help="Use DDP if set")
     parser.add_argument("--root", default=".", type=str,
                         help="Root folder to save data in")
     parser.add_argument("--resume", default='', type=str, help="Resume from checkpoint")
@@ -361,6 +363,10 @@ if __name__ == '__main__':
     parser.add_argument('--eigen_crop', default=True, help='if set, crops according to Eigen NIPS14',
                         action='store_true')
     parser.add_argument('--garg_crop', help='if set, crops according to Garg  ECCV16', action='store_true')
+    parser.add_argument('--w_grad', default=1.0, type=float, help='weight of gradient loss')
+    parser.add_argument('--w_norm', default=1.0, type=float, help='weight of normal loss')
+
+
 
     if sys.argv.__len__() == 2:
         arg_filename_with_prefix = '@' + sys.argv[1]
